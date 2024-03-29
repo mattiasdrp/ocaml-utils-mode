@@ -26,8 +26,11 @@
 (defvar ocaml-utils-dune-history nil
   "The history list for dune watch builds.")
 
-;; TODO: This function should be its own package
-(defun ocaml-utils--dune-watch ()
+(defcustom ocaml-utils-lock-dune nil
+  "Should dune watch take the lock?")
+
+;;;###autoload
+(defun ocaml-utils-dune-watch ()
   "Will call dune build -w BUILD on an async process."
   (interactive)
   (cond
@@ -44,7 +47,11 @@
           (buffer (get-buffer-create "*dune watch*"))
           (inhibit-read-only t))
       (with-current-buffer buffer
-        (projectile-run-async-shell-command-in-root (concat "dune build -w " build) buffer)
+        (projectile-run-async-shell-command-in-root
+         (concat (if ocaml-utils-lock-dune
+                     ""
+                   "DUNE_CONFIG__GLOBAL_LOCK=disabled ")
+                 "dune build -w " build) buffer)
         ;; Make this process non blocking for killing
         ;; (defun mdrp/erase-and-fill-buffer-no-lambda ()
         ;;   "Wrapper to avoid using lambda"
@@ -148,7 +155,6 @@
 
 ;;; MAIN FUNCTIONS
 
-
 (defun ocaml-utils-destruct ()
   (interactive)
   (let ((content (ocaml-utils--lsp-type-at-point))
@@ -172,6 +178,7 @@
 (defun ocaml-utils--key (key)
   (kbd (concat ocaml-utils-keymap-prefix " " key)))
 
+;;;###autoload
 (define-minor-mode ocaml-utils-mode
   "Toggles buffer local ocaml-utils-mode."
   :init-value nil
@@ -180,6 +187,7 @@
   :lighter " ocaml-utils"
   :keymap
   (list
+   (cons (ocaml-utils--key "w") #'ocaml-utils-dune-watch)
    (cons (ocaml-utils--key "a") #'ocaml-utils-destruct)))
 
 (provide 'ocaml-utils-mode)
