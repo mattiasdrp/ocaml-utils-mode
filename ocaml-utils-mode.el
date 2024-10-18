@@ -43,7 +43,7 @@
                                       '((window-height . 0.2)))
           (set-window-dedicated-p (selected-window) t)
           (compilation-minor-mode t)))))
-   ((let ((build (read-from-minibuffer "Build name: " nil nil nil 'mdrp/dune-history))
+   ((let ((build (read-from-minibuffer "Build name: " nil nil nil 'ocaml-utils-dune-history))
           (buffer (get-buffer-create "*dune watch*"))
           (inhibit-read-only t))
       (with-current-buffer buffer
@@ -53,10 +53,10 @@
                    "DUNE_CONFIG__GLOBAL_LOCK=disabled ")
                  "dune build -w " build) buffer)
         ;; Make this process non blocking for killing
-        ;; (defun mdrp/erase-and-fill-buffer-no-lambda ()
+        ;; (defun ocaml-utils-erase-and-fill-buffer-no-lambda ()
         ;;   "Wrapper to avoid using lambda"
-        ;;   (mdrp/erase-and-fill-buffer buffer))
-        ;; (add-hook 'after-save-hook #'mdrp/erase-and-fill-buffer-no-lambda)
+        ;;   (ocaml-utils-erase-and-fill-buffer buffer))
+        ;; (add-hook 'after-save-hook #'ocaml-utils-erase-and-fill-buffer-no-lambda)
         (with-selected-window
             (display-buffer-at-bottom (current-buffer)
                                       '((window-height . 0.2)))
