@@ -107,8 +107,8 @@
          (value (replace-regexp-in-string re "" (or value "")))
          (value (string-trim value))
          (type `(:index ,index
-                       :value ,value
-                       :type ,(ocaml-utils--get-type value))))
+                        :value ,value
+                        :type ,(ocaml-utils--get-type value))))
     type ))
 
 (defun ocaml-utils--types-alist ()
@@ -118,12 +118,21 @@
       (goto-char (line-beginning-position 2))
       ;; collect definitions
       (while (caml-prev-index-position-function)
-        (setq name (caml-match-string 5))
-        (setq index (point))
-        (when (looking-at "[ \t]*type")
-          (let* ((content (ocaml-utils--lsp-type-at-point))
-                 (type (ocaml-utils--parse-type content index)))
-            (puthash name type type-alist))))
+        (let* ((name (caml-match-string 5)))
+          (when (looking-at "[ \t]*type")
+            (save-excursion
+              (let* ((_ (forward-char 5))
+                     (index (point))
+                     (content (ocaml-utils--lsp-type-at-point))
+                     (type (ocaml-utils--parse-type content index)))
+                (puthash name type type-alist))))
+          (when (looking-at "[ \t]*and")
+            (save-excursion
+              (let* ((_ (forward-char 4))
+                     (index (point))
+                     (content (ocaml-utils--lsp-type-at-point))
+                     (type (ocaml-utils--parse-type content index)))
+                (puthash name type type-alist))))))
       type-alist)))
 
 (defun ocaml-utils--insert-type (value word)
@@ -140,8 +149,8 @@
 (defun ocaml-utils--complete-type (word)
   (let* ((start (point))
          (types-alist (ocaml-utils--types-alist))
-         (type_chosen (completing-read "Choose a type" types-alist))
-         (value (gethash type_chosen types-alist)))
+         (type-chosen (completing-read "Choose a type: " types-alist))
+         (value (gethash type-chosen types-alist)))
     (ocaml-utils--insert-type value word)))
 
 ;;; HELPERS
