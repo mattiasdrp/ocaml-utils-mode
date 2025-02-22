@@ -14,10 +14,8 @@
 ;; Package-Requires: ((emacs "29.1"))
 
 ;;; Commentary:
-;;
-;; OCaml utilities.
+;; This minor mode adds some utilities to OCaml in emacs
 
-;;
 ;;; Code:
 
 (require 'ace-window)
@@ -64,9 +62,11 @@
           (compilation-minor-mode t))
         (set-process-query-on-exit-flag (get-buffer-process buffer) nil))))))
 
-;;; ADT
-
 (defun ocaml-utils--transform-constructor (value)
+  "Transform an OCaml constructor in an elisp cons cell.
+If the constructor is a constant, returns a cons with its car set to it
+and its cdr set to nil.
+Otherwise, the cdr is the parameters attached to the constructor."
   (let* ((lvalue (string-split value "of"))
          (left (string-trim (car lvalue)))
          (right (nth 1 lvalue)))
@@ -74,7 +74,9 @@
         (cons left (string-trim right))
       (cons left nil))))
 
-(defun ocaml-utils--pp-adt (value)
+(defun ocaml-utils--pp-variant (value)
+  "For each constructors in the type declaration, create a pattern matching branch.
+If the constructor expects arguments, add a ~_~."
   (let* ((values (s-split "|" value t))
          (values (mapcar #'ocaml-utils--transform-constructor values))
          (txt
@@ -84,35 +86,36 @@
                           (`(,left . ,right)  (concat acc "\n| " left " _ -> _")))) values "" )))
     (string-trim-left txt)))
 
-;;; TYPES
-
 (defun ocaml-utils--lsp-type-at-point ()
+  "Queries LSP for the type at point."
   (-some->> (lsp--text-document-position-params)
     (lsp--make-request "textDocument/hover")
     (lsp--send-request)
     (lsp:hover-contents)))
 
+(defun ocaml-utils--parse-type (content index)
+  "Parses the type returned by LSP."
+  (let* ((value (plist-get content :value))
+         (regexp "[\n\r]+\\|```\\(?:ocaml\\)?\\|.*=")
+         (value (replace-regexp-in-string regexp "" (or value "")))
+         (value (string-trim value)))
+    `(:index ,index
+             :value ,value
+             :type ,(ocaml-utils--get-type value))))
+
 (defun ocaml-utils--get-type (string)
+  "Returns the kind of type.
+A variant, a record, an option a result or anything else."
   (cond
-   ((string-prefix-p "|" string) :adt)
+   ((string-prefix-p "|" string) :variant)
    ((string-prefix-p "{" string) :record)
    ((string-suffix-p "option" string) :option)
    ((string-suffix-p "result" string) :result)
-   ((string-match-p "|" string) :adt)
+   ((string-match-p "|" string) :variant)
    (t :other)))
 
-(defun ocaml-utils--parse-type (content index)
-  (let* ((value (plist-get content :value))
-         (re "[\n\r]+\\|```\\(?:ocaml\\)?\\|.*=")
-         (value (replace-regexp-in-string re "" (or value "")))
-         (value (string-trim value))
-         (type `(:index ,index
-                        :value ,value
-                        :type ,(ocaml-utils--get-type value))))
-    type ))
-
 (defun ocaml-utils--types-alist ()
-  "Return the list of all types declared in the current buffer."
+  "Returns the list of all types declared in the current buffer before point."
   (save-excursion
     (let ((type-alist (make-hash-table :test 'equal)))
       (goto-char (line-beginning-position 2))
@@ -136,8 +139,9 @@
       type-alist)))
 
 (defun ocaml-utils--insert-type (value word)
-  (when (eq (plist-get value :type) :adt)
-    (let* ((txt (ocaml-utils--pp-adt (plist-get value :value)))
+  "If the value represents an variant, inserts it's destruction as a pattern matching."
+  (when (eq (plist-get value :type) :variant)
+    (let* ((txt (ocaml-utils--pp-variant (plist-get value :value)))
            (word (or word "_"))
            (txt (concat "match " word " with\n" txt))
            (bounds (bounds-of-thing-at-point 'symbol))
@@ -147,13 +151,12 @@
       (indent-region start (point)))))
 
 (defun ocaml-utils--complete-type (word)
+  "Asks the user for a type and if this type is a variant, destruct it."
   (let* ((start (point))
          (types-alist (ocaml-utils--types-alist))
          (type-chosen (completing-read "Choose a type: " types-alist))
          (value (gethash type-chosen types-alist)))
     (ocaml-utils--insert-type value word)))
-
-;;; HELPERS
 
 (defun ocaml-utils--extract-name (content)
   (let* ((value (plist-get content :value))
@@ -162,9 +165,10 @@
          (name (match-string 1 value)))
     name))
 
-;;; MAIN FUNCTIONS
-
+;;;###autoload
 (defun ocaml-utils-destruct ()
+  "Destruct the variable at point.
+If no type can be inferred for the variable, asks the user for a type."
   (interactive)
   (let ((content (ocaml-utils--lsp-type-at-point))
         (word (thing-at-point 'symbol)))
@@ -176,8 +180,6 @@
               (ocaml-utils--insert-type value word)
             (ocaml-utils--complete-type word)))
       (ocaml-utils--complete-type word))))
-
-;;; MODE
 
 (defcustom ocaml-utils-keymap-prefix "\C-c \C-o"
   "The prefix for ocaml-utils-mode key bindings."
