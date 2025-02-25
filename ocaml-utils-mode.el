@@ -1,6 +1,6 @@
-;;; ocaml-utils-mode.el --- Emacs Minor Mode for OCaml utilitites
+;;; ocaml-utils-mode.el --- Emacs Minor Mode for OCaml utilitites -*- lexical-binding: t -*-
 
-;; Copyright (C) 2024  mattiasdrp
+;; Copyright (C) 2024 mattiasdrp
 
 
 ;; Author: mattiasdrp
