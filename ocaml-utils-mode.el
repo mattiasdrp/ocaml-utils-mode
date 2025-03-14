@@ -1,4 +1,4 @@
-;;; ocaml-utils-mode.el --- Emacs Minor Mode for OCaml utilitites -*- lexical-binding: t -*-
+;;; ocaml-utils-mode.el --- Emacs Minor Mode for OCaml utilities -*- lexical-binding: t -*-
 
 ;; Copyright (C) 2024 mattiasdrp
 
@@ -27,23 +27,42 @@
 (defcustom ocaml-utils-lock-dune nil
   "Should dune watch take the lock?")
 
+;;; DUNE WATCH
+
+(defcustom ocaml-utils-dune-watch-buffer-name "*dune watch*"
+  "Name of the buffer containing the dune watch execution.")
+
+(defvar ocaml-utils--dune-watch-execution nil
+  "Is a dune watcher running?")
+
+(defun ocaml-utils--display-dune-watch-buffer ()
+  "Displays the buffer in a new dedicated window.
+If DISPLAY-BUFFER-ALIST contains a rule for such buffers, displays it in this window instead"
+  (if (display-buffer-assq-regexp ocaml-utils-dune-watch-buffer-name display-buffer-alist nil)
+      (display-buffer ocaml-utils-dune-watch-buffer-name)
+    (progn (display-buffer-at-bottom
+            (current-buffer)
+            '((window-height . 0.2)))
+           (set-window-dedicated-p (selected-window) t)))
+  (compilation-minor-mode t))
+
 ;;;###autoload
 (defun ocaml-utils-dune-watch ()
   "Will call dune build -w BUILD on an async process."
   (interactive)
   (cond
-   ((and-let* ((window (get-buffer-window "*dune watch*")))
+   ((and-let* ((_ ocaml-utils--dune-watch-execution)
+               (window (get-buffer-window ocaml-utils-dune-watch-buffer-name)))
       (aw-switch-to-window window)))
-   ((and-let* ((buffer (get-buffer "*dune watch*")))
+   ((and-let* ((_ ocaml-utils--dune-watch-execution)
+               (buffer (get-buffer ocaml-utils-dune-watch-buffer-name)))
       (with-current-buffer buffer
         (with-selected-window
-            (display-buffer-at-bottom (current-buffer)
-                                      '((window-height . 0.2)))
-          (set-window-dedicated-p (selected-window) t)
-          (compilation-minor-mode t)))))
-   ((let ((build (read-from-minibuffer "Build name: " nil nil nil 'ocaml-utils-dune-history))
-          (buffer (get-buffer-create "*dune watch*"))
-          (inhibit-read-only t))
+            ocaml-utils--display-dune-watch-buffer ()))))
+   ((let* ((build (read-from-minibuffer "Build name: " nil nil nil 'ocaml-utils-dune-history))
+           (buffer (get-buffer-create ocaml-utils-dune-watch-buffer-name))
+           (inhibit-read-only t)
+           (ocaml-utils--dune-watch-execution t))
       (with-current-buffer buffer
         (projectile-run-async-shell-command-in-root
          (concat (if ocaml-utils-lock-dune
@@ -55,12 +74,10 @@
         ;;   "Wrapper to avoid using lambda"
         ;;   (ocaml-utils-erase-and-fill-buffer buffer))
         ;; (add-hook 'after-save-hook #'ocaml-utils-erase-and-fill-buffer-no-lambda)
-        (with-selected-window
-            (display-buffer-at-bottom (current-buffer)
-                                      '((window-height . 0.2)))
-          (set-window-dedicated-p (selected-window) t)
-          (compilation-minor-mode t))
+        (with-selected-window (ocaml-utils--display-dune-watch-buffer))
         (set-process-query-on-exit-flag (get-buffer-process buffer) nil))))))
+
+;;; ADT
 
 (defun ocaml-utils--transform-constructor (value)
   "Transform an OCaml constructor in an elisp cons cell.
@@ -114,6 +131,8 @@ A variant, a record, an option a result or anything else."
    ((string-match-p "|" string) :variant)
    (t :other)))
 
+;;; TYPES
+
 (defun ocaml-utils--types-alist ()
   "Returns the list of all types declared in the current buffer before point."
   (save-excursion
@@ -158,12 +177,16 @@ A variant, a record, an option a result or anything else."
          (value (gethash type-chosen types-alist)))
     (ocaml-utils--insert-type value word)))
 
+;;; HELPERS
+
 (defun ocaml-utils--extract-name (content)
   (let* ((value (plist-get content :value))
          (re_name "[\n\r]*```ocaml[[:space:]]\\(.*\\)[[:space:]]")
          (_ (string-match re_name value))
          (name (match-string 1 value)))
     name))
+
+;;; MAIN FUNCTIONS
 
 ;;;###autoload
 (defun ocaml-utils-destruct ()
@@ -188,6 +211,8 @@ If no type can be inferred for the variable, asks the user for a type."
 
 (defun ocaml-utils--key (key)
   (kbd (concat ocaml-utils-keymap-prefix " " key)))
+
+;;; MODE
 
 ;;;###autoload
 (define-minor-mode ocaml-utils-mode
