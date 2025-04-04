@@ -20,6 +20,9 @@
 
 (require 'ace-window)
 (require 'caml nil t)
+(require 'dash)
+(require 'ht)
+(require 'lsp-mode)
 
 (defvar ocaml-utils-dune-history nil
   "The history list for dune watch builds.")
@@ -29,58 +32,77 @@
 
 ;;; DUNE WATCH
 
-(defcustom ocaml-utils-dune-watch-buffer-name "*dune watch*"
-  "Name of the buffer containing the dune watch execution.")
+(defun ocaml-utils--generate-command (build-system command)
+  "Generate a dune or make COMMAND depending on BUILD-SYSTEM."
+  (concat
+   (pcase build-system
+     (`make (format "BUILD-EXTRA=--watch make %s" command))
+     (`dune (format "opam exec -- dune %s --watch" command)))))
 
-(defvar ocaml-utils--dune-watch-execution nil
-  "Is a dune watcher running?")
+(defcustom ocaml-utils--dune-watch-buffer "*dune watch*"
+  "Buffer for dune watch results.")
 
-(defun ocaml-utils--display-dune-watch-buffer ()
+(defvar-local ocaml-utils--dune-watch-process nil
+  "Currently running dune watch process.")
+
+(defun ocaml-utils--display-dune-watch-buffer (buffer)
   "Displays the buffer in a new dedicated window.
 If DISPLAY-BUFFER-ALIST contains a rule for such buffers, displays it in this window instead"
-  (if (display-buffer-assq-regexp ocaml-utils-dune-watch-buffer-name display-buffer-alist nil)
-      (display-buffer ocaml-utils-dune-watch-buffer-name)
-    (progn (display-buffer-at-bottom
-            (current-buffer)
-            '((window-height . 0.2)))
-           (set-window-dedicated-p (selected-window) t)))
-  (compilation-minor-mode t))
+  (if (display-buffer-assq-regexp buffer display-buffer-alist nil)
+      (display-buffer buffer)
+    (display-buffer-at-bottom
+     buffer
+     '((window-height . 0.2)))))
 
 ;;;###autoload
-(defun ocaml-utils-dune-watch ()
-  "Will call dune build -w BUILD on an async process."
-  (interactive)
-  (cond
-   ((and-let* ((_ ocaml-utils--dune-watch-execution)
-               (window (get-buffer-window ocaml-utils-dune-watch-buffer-name)))
-      (aw-switch-to-window window)))
-   ((and-let* ((_ ocaml-utils--dune-watch-execution)
-               (buffer (get-buffer ocaml-utils-dune-watch-buffer-name)))
-      (with-current-buffer buffer
-        (with-selected-window
-            ocaml-utils--display-dune-watch-buffer ()))))
-   ((let* ((build (read-from-minibuffer "Build name: " nil nil nil 'ocaml-utils-dune-history))
-           (buffer (get-buffer-create ocaml-utils-dune-watch-buffer-name))
-           (inhibit-read-only t)
-           (ocaml-utils--dune-watch-execution t))
-      (with-current-buffer buffer
-        (projectile-run-async-shell-command-in-root
-         (concat (if ocaml-utils-lock-dune
-                     ""
-                   "DUNE_CONFIG__GLOBAL_LOCK=disabled ")
-                 "dune build -w " build) buffer)
-        ;; Make this process non blocking for killing
-        ;; (defun ocaml-utils-erase-and-fill-buffer-no-lambda ()
-        ;;   "Wrapper to avoid using lambda"
-        ;;   (ocaml-utils-erase-and-fill-buffer buffer))
-        ;; (add-hook 'after-save-hook #'ocaml-utils-erase-and-fill-buffer-no-lambda)
-        (with-selected-window (ocaml-utils--display-dune-watch-buffer))
-        (set-process-query-on-exit-flag (get-buffer-process buffer) nil))))))
+(defun ocaml-utils-start-dune-watch (build-system)
+  "Start a subprocess to run the BUILD-SYSTEM applied to a rule using the --watch flag."
+  (interactive
+   (list
+    (intern
+     (completing-read "Choose a build system: "
+                      '("make" "dune")))))
+  (let* ((command (read-from-minibuffer "Build name: " nil nil nil 'ocaml-utils-dune-history))
+         (command (ocaml-utils--generate-command build-system command)))
+    (message "starting process to watch %s task..."  command)
+    (projectile-run-async-shell-command-in-root command))
+  (add-hook 'lsp-diagnostics-updated-hook 'ocaml-utils--report-diagnostics nil t))
 
-;;; ADT
+(defun ocaml-utils--report-diagnostics ()
+  "Report newly received diagnostics in a dune-watch buffer that behaves like the compilation buffer."
+  (let* ((diagnostics (lsp-diagnostics t))
+         (formatted-diagnostics (ocaml-utils--format-diagnostics diagnostics))
+         (buffer (get-buffer-create ocaml-utils--dune-watch-buffer))
+         (window (if-let* ((window (get-buffer-window buffer)))
+                     window
+                   (ocaml-utils--display-dune-watch-buffer buffer))))
+    (with-current-buffer buffer
+      (let ((inhibit-read-only t))
+        (with-selected-window window
+          (erase-buffer)
+          (dolist (diagnostic (-flatten formatted-diagnostics))
+            (insert diagnostic))
+          (compilation-mode t))))))
+
+(add-hook 'lsp-diagnostics-updated-hook 'ocaml-utils--report-diagnostics nil t)
+
+(defun ocaml-utils--format-per-file-diagnostic (file messages)
+  (--map (-let* (((&Diagnostic :message :severity?
+                               :range (range &as &Range
+                                             :start (&Position :line start-line :character)
+                                             :end (&Position :line end-line))) it)
+                 ((start . end) (lsp--range-to-region range))
+                 (severity-string (if (= severity? 1) "Error" "Warning")))
+           (format "%s:%d:%d: %s %s\n\n" file start-line character severity-string message))
+         messages))
+
+(defun ocaml-utils--format-diagnostics (diagnostics)
+  "Convert LSP diagnostics to a format suitable for the Emacs compilation buffer."
+  (ht-map #'ocaml-utils--format-per-file-diagnostic diagnostics))
 
 (defun ocaml-utils--transform-constructor (value)
   "Transform an OCaml constructor in an elisp cons cell.
+
 If the constructor is a constant, returns a cons with its car set to it
 and its cdr set to nil.
 Otherwise, the cdr is the parameters attached to the constructor."
@@ -93,6 +115,7 @@ Otherwise, the cdr is the parameters attached to the constructor."
 
 (defun ocaml-utils--pp-variant (value)
   "For each constructors in the type declaration, create a pattern matching branch.
+
 If the constructor expects arguments, add a ~_~."
   (let* ((values (s-split "|" value t))
          (values (mapcar #'ocaml-utils--transform-constructor values))
@@ -122,6 +145,7 @@ If the constructor expects arguments, add a ~_~."
 
 (defun ocaml-utils--get-type (string)
   "Returns the kind of type.
+
 A variant, a record, an option a result or anything else."
   (cond
    ((string-prefix-p "|" string) :variant)
@@ -191,6 +215,7 @@ A variant, a record, an option a result or anything else."
 ;;;###autoload
 (defun ocaml-utils-destruct ()
   "Destruct the variable at point.
+
 If no type can be inferred for the variable, asks the user for a type."
   (interactive)
   (let ((content (ocaml-utils--lsp-type-at-point))
