@@ -84,7 +84,7 @@ If DISPLAY-BUFFER-ALIST contains a rule for such buffers, displays it in this wi
             (insert diagnostic))
           (compilation-mode t))))))
 
-(add-hook 'lsp-diagnostics-updated-hook 'ocaml-utils--report-diagnostics nil t)
+;; (add-hook 'lsp-diagnostics-updated-hook 'ocaml-utils--report-diagnostics nil t)
 
 (defun ocaml-utils--format-per-file-diagnostic (file messages)
   (--map (-let* (((&Diagnostic :message :severity?
