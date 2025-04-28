@@ -79,6 +79,17 @@
 (defvar ocaml-utils--args nil "Build arguments.")
 (defvar ocaml-utils--command nil "Registered command.")
 
+(defun ocaml-utils--kill-dune-process ()
+  "Kill the currently running dune process and wait for it to be killed before returning."
+  (when ocaml-utils--dune-watch-process
+    (ignore-errors
+      (quit-process ocaml-utils--dune-watch-process)
+      (while (or (get-buffer-process ocaml-utils--dune-watch-buffer)
+                 (get-buffer-process shell-command-buffer-name-async))
+        (sleep-for 0.1))
+      (kill-buffer (get-buffer shell-command-buffer-name-async)))
+    (message "dune process killed")))
+
 ;;;###autoload
 (defun ocaml-utils-build-with (command &optional args)
   "Build COMMAND ARGS according to a chosen build-system."
@@ -89,35 +100,34 @@
             "Compile command: "
             (if (eq ocaml-utils--build-system 'dune) "dune " "make "))
            (transient-args 'ocaml-utils-compile))))
-  (setq ocaml-utils--args args)
-  (let* ((watch (member "--watch" args))
-         (lock (member "--lock" args))
-         (diagnostics (member "--diagnostics" args))
-         (alias (transient-arg-value "--alias=" args)))
-    (setq ocaml-utils--command (ocaml-utils--generate-command ocaml-utils--build-system watch alias lock command))
-    (message "starting process to watch %s task..." ocaml-utils--command)
-    (let ((display-buffer-alist
-           (add-to-list 'display-buffer-alist
-                        (cons shell-command-buffer-name-async
-                              (cons #'display-buffer-no-window nil)))))
-      (when (or (not ocaml-utils--dune-watch-process)
-                (and ocaml-utils--dune-watch-process
-                     (y-or-n-p "A dune process is already running, kill it?")))
-        (ignore-errors (quit-process ocaml-utils--dune-watch-process))
-        (while (get-buffer-process ocaml-utils--dune-watch-process)
-          (sleep-for 0.1))
-        (setq ocaml-utils--dune-watch-process nil)
+  (when (or (not ocaml-utils--dune-watch-process)
+            (and ocaml-utils--dune-watch-process
+                 (y-or-n-p "A dune process is already running, kill it?")))
+    (ocaml-utils--kill-dune-process)
+    (setq ocaml-utils--args args)
+    (let* ((watch (member "--watch" args))
+           (lock (member "--lock" args))
+           (diagnostics (member "--diagnostics" args))
+           (alias (transient-arg-value "--alias=" args)))
+      (setq ocaml-utils--command (ocaml-utils--generate-command ocaml-utils--build-system watch alias lock command))
+      (message "Starting process `%s'..." ocaml-utils--command)
+      (let ((display-buffer-alist
+             (add-to-list 'display-buffer-alist
+                          (cons shell-command-buffer-name-async
+                                (cons #'display-buffer-no-window nil)))))
         (projectile-run-async-shell-command-in-root ocaml-utils--command)
-        (setq ocaml-utils--dune-watch-process (get-buffer-process (get-buffer shell-command-buffer-name-async))))
-      (when diagnostics
-        (add-hook 'lsp-diagnostics-updated-hook 'ocaml-utils--report-diagnostics nil t)))))
+        (message "Process `%s' started" ocaml-utils--command)
+        (run-at-time 3 nil (lambda () (message nil)))
+        (setq ocaml-utils--dune-watch-process
+              (get-buffer-process (get-buffer shell-command-buffer-name-async)))
+        (when diagnostics
+          (add-hook 'lsp-diagnostics-updated-hook 'ocaml-utils--report-diagnostics nil t))))))
 
 ;;;###autoload
 (defun ocaml-utils-kill-dune-build ()
   "Kill the currently running dune process."
   (interactive)
-  (when ocaml-utils--dune-watch-process
-    (kill-process ocaml-utils--dune-watch-process)))
+  (ocaml-utils--kill-dune-process))
 
 (defun ocaml-utils-restart-dune-build ()
   "Restart the currently running dune process."
@@ -175,29 +185,30 @@
                    (ocaml-utils--display-dune-watch-buffer buffer))))
     (when ocaml-utils--debug (message "received %S\n-------------" diagnostics))
     (with-current-buffer buffer
-      (let ((inhibit-read-only t))
+      (let ((inhibit-read-only t)
+            (command ocaml-utils--command))
         (erase-buffer)
-        (insert ocaml-utils--command ": \n\n")
+        (font-lock-mode -1)
+        (put-text-property 0 (length command) 'font-lock-face 'font-lock-comment-face command)
+        (insert command "\n\n")
         (dolist (diagnostic (-flatten formatted-diagnostics))
-          (insert diagnostic))
+          (insert (substring-no-properties diagnostic)))
         (compilation-mode)
         (setq next-error-last-buffer buffer)
-        (ocaml-utils--bold-quoted-substrings-in-buffer)
+        (ocaml-utils--bold-quoted-files-in-buffer)
         (goto-char (point-min))))))
 
-(defun ocaml-utils--bold-quoted-substrings-in-buffer ()
+(defun ocaml-utils--bold-quoted-files-in-buffer ()
   "Make substrings in double quotes bold in the current buffer."
   (save-excursion
     (goto-char (point-min))
     (let ((case-fold-search nil))
-      (while (re-search-forward "\"\\([^\"]+\\)\"" nil t)
-        (let ((start (match-beginning 0))
-              (end (match-end 0))
+      (while (re-search-forward "File \"\\([^\"]+\\)\"" nil t)
+        (let ((start (match-beginning 1))
+              (end (match-end 1))
               (text (match-string 1)))
-          ;; Replace the whole match with the inner text (no quotes)
-          (replace-match text t t)
           ;; Apply bold face to the newly inserted text
-          (put-text-property start (- end 2) 'font-lock-face 'bold))))))
+          (put-text-property start end 'font-lock-face 'bold))))))
 
 (defun ocaml-utils--make-relative-file (file)
   "Make FILE path relative to the project root dir."
